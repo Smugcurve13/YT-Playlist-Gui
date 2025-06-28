@@ -1,2 +1,4 @@
 Downloads
 .venv
+*.pyc
+__pycache__

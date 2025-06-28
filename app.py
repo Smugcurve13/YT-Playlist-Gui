@@ -1,53 +1,147 @@
-import yt_dlp
 import os
+import logging
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from typing import List, Optional
+import yt_dlp
+import ffmpeg
+from utils import (
+    ensure_media_dir, sanitize_filename, generate_uuid_filename,
+    get_media_path, cleanup_file
+)
 
-def download_youtube_playlist_mp3(playlist_url, output_folder="DHH_for_Cute_gurls"):
-    """
-    Downloads all videos from a given YouTube playlist as highest quality MP3s.
+app = FastAPI()
+ensure_media_dir()
 
-    Args:
-        playlist_url (str): The URL of the YouTube playlist.
-        output_folder (str): The name of the folder where the MP3s will be saved.
-                             This folder will be created in the current working directory.
-    """
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
 
-    # Create the output directory if it doesn't exist
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder)
-        print(f"Created output directory: {output_folder}")
-    else:
-        print(f"Using existing output directory: {output_folder}")
+class ConvertRequest(BaseModel):
+    url: str
+    format: str  # "mp3" or "mp4"
+    quality: Optional[str] = None  # e.g., "320" for mp3, "720" for mp4
 
-    # yt-dlp options for downloading audio
+class BatchRequest(BaseModel):
+    urls: List[str]
+    format: str
+    quality: Optional[str] = None
+
+class PlaylistRequest(BaseModel):
+    url: str
+    format: str
+    quality: Optional[str] = None
+
+def download_and_convert(url, fmt, quality, filename):
     ydl_opts = {
-        'format': 'bestaudio/best',  # Select the best audio format
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',  # Use FFmpeg to extract audio
-            'preferredcodec': 'mp3',      # Convert to MP3
-            'preferredquality': '0',      # Highest quality for MP3
-        }],
-        'extract_flat': 'auto',  # Automatically handle playlist extraction
-        'yes_playlist': True,    # Explicitly tell yt-dlp it's a playlist
-        'outtmpl': os.path.join(output_folder, '%(title)s.%(ext)s'), # Output template
-                                                                     # %(title)s for video title
-                                                                     # %(ext)s for file extension (mp3)
-        'ignoreerrors': True,    # Continue if some videos in the playlist cause errors
-        'restrictfilenames': True, # Keep filenames simple (no special characters)
-        'noplaylist': False,     # Process as a playlist
-        'progress_hooks': [lambda d: print(f"Status: {d['status']} - {d.get('_percent_str', '')} {d.get('_eta_str', '')}")], # Show progress
-        'verbose': False,        # Set to True for more detailed debug output
+        "outtmpl": get_media_path(filename),
+        "format": "bestaudio/best" if fmt == "mp3" else "bestvideo+bestaudio/best",
+        "noplaylist": True,
+        "quiet": True,
+        "ignoreerrors": False,
     }
-
     try:
-        print(f"\nStarting download for playlist: {playlist_url}")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([playlist_url])
-        print(f"\nDownload complete! MP3s saved to: {os.path.abspath(output_folder)}")
+            info = ydl.extract_info(url, download=True)
+            downloaded_path = ydl.prepare_filename(info)
+            # Conversion if needed
+            if fmt == "mp3":
+                target_path = get_media_path(generate_uuid_filename("mp3"))
+                (
+                    ffmpeg
+                    .input(downloaded_path)
+                    .output(target_path, audio_bitrate=f"{quality}k" if quality else "320k", format="mp3", acodec="libmp3lame")
+                    .run(overwrite_output=True, quiet=True)
+                )
+                cleanup_file(downloaded_path)
+                return target_path
+            elif fmt == "mp4":
+                target_path = get_media_path(generate_uuid_filename("mp4"))
+                (
+                    ffmpeg
+                    .input(downloaded_path)
+                    .output(target_path, video_bitrate=f"{quality}k" if quality else None, format="mp4", vcodec="libx264", acodec="aac")
+                    .run(overwrite_output=True, quiet=True)
+                )
+                cleanup_file(downloaded_path)
+                return target_path
+            else:
+                raise ValueError("Invalid format")
     except Exception as e:
-        print(f"\nAn error occurred during download: {e}")
-        print("Please ensure FFmpeg is installed and accessible in your system's PATH.")
-        print("You can download FFmpeg from: https://ffmpeg.org/download.html")
+        logging.error(f"Download/convert error: {e}")
+        raise
+
+@app.post("/api/convert")
+async def convert(request: ConvertRequest, background_tasks: BackgroundTasks):
+    ensure_media_dir()
+    ext = request.format
+    filename = generate_uuid_filename(ext)
+    try:
+        file_path = download_and_convert(request.url, request.format, request.quality, filename)
+        public_url = f"/media/{os.path.basename(file_path)}"
+        logging.info(f"File ready: {public_url}")
+        return {"status": "success", "download_url": public_url}
+    except Exception as e:
+        logging.error(f"Conversion failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/convert/batch")
+async def convert_batch(request: BatchRequest, background_tasks: BackgroundTasks):
+    ensure_media_dir()
+    results = []
+    for url in request.urls:
+        try:
+            ext = request.format
+            filename = generate_uuid_filename(ext)
+            file_path = download_and_convert(url, request.format, request.quality, filename)
+            public_url = f"/media/{os.path.basename(file_path)}"
+            results.append({"url": url, "download_url": public_url, "status": "success"})
+        except Exception as e:
+            results.append({"url": url, "error": str(e), "status": "failed"})
+    return {"results": results}
+
+@app.post("/api/convert/playlist")
+async def convert_playlist(request: PlaylistRequest, background_tasks: BackgroundTasks):
+    # For demo: process synchronously, but you can use Celery for real background jobs
+    ensure_media_dir()
+    ydl_opts = {
+        "extract_flat": True,
+        "quiet": True,
+        "ignoreerrors": True,
+    }
+    video_urls = []
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(request.url, download=False)
+            if "entries" in info:
+                for entry in info["entries"]:
+                    if entry and "url" in entry:
+                        video_urls.append(f"https://www.youtube.com/watch?v={entry['id']}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to extract playlist: {e}")
+
+    results = []
+    for url in video_urls:
+        try:
+            ext = request.format
+            filename = generate_uuid_filename(ext)
+            file_path = download_and_convert(url, request.format, request.quality, filename)
+            public_url = f"/media/{os.path.basename(file_path)}"
+            results.append({"url": url, "download_url": public_url, "status": "success"})
+        except Exception as e:
+            results.append({"url": url, "error": str(e), "status": "failed"})
+    return {"results": results}
+
+@app.get("/media/{filename}")
+async def serve_media(filename: str):
+    file_path = get_media_path(filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path, media_type="application/octet-stream", filename=filename)
 
 if __name__ == "__main__":
-    playlist_link = "https://youtube.com/playlist?list=PLVbLhzs-GWDklTDNi_k_cXO_dawcefU2x&si=0NNRSuodxMf-cozi"
-    download_youtube_playlist_mp3(playlist_link)
+    import uvicorn
+    uvicorn.run(app)

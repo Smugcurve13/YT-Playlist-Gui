@@ -1,2 +1,7 @@
-streamlit
+fastapi
+uvicorn
 yt-dlp
+pydantic
+python-multipart
+aiofiles
+ffmpeg-python
