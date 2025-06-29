@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api import convert, playlist, batch, status, download
+from api.routes import router
 
 app = FastAPI()
 
@@ -16,11 +16,7 @@ app.add_middleware(
 def root():
     return {"message": "api is running"}
 
-app.include_router(convert.router, prefix="/api")
-app.include_router(playlist.router, prefix="/api")
-app.include_router(batch.router, prefix="/api")
-app.include_router(status.router, prefix="/api")
-app.include_router(download.router, prefix="/api")
+app.include_router(router)
 
 if __name__ == "__main__":
     import uvicorn
