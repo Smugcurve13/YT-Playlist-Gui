@@ -2,3 +2,5 @@ Downloads
 .venv
 *.pyc
 __pycache__
+media
+old_tests
