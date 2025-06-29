@@ -1,7 +1,11 @@
 import os
 import uuid
+import json
+import asyncio
+from datetime import datetime, timedelta
 
 MEDIA_DIR = "media"
+METADATA_EXT = ".metadata.json"
 
 def ensure_media_dir():
     if not os.path.exists(MEDIA_DIR):

@@ -1,8 +1,19 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api import convert, playlist, batch, status, download
+from api.routes import router
+from helpers.media_cleanup import periodic_media_cleanup
+import asyncio
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    task = asyncio.create_task(periodic_media_cleanup())
+    yield
+    # Shutdown (optional: cancel the cleanup task if needed)
+    task.cancel()
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,11 +27,7 @@ app.add_middleware(
 def root():
     return {"message": "api is running"}
 
-app.include_router(convert.router, prefix="/api")
-app.include_router(playlist.router, prefix="/api")
-app.include_router(batch.router, prefix="/api")
-app.include_router(status.router, prefix="/api")
-app.include_router(download.router, prefix="/api")
+app.include_router(router)
 
 if __name__ == "__main__":
     import uvicorn

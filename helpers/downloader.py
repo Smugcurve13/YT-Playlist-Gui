@@ -2,7 +2,10 @@ import yt_dlp
 import ffmpeg
 from .file_utils import generate_uuid_filename, get_media_path, cleanup_file
 from .job_manager import update_job_progress
+from .media_cleanup import write_metadata
 import os
+import json
+from datetime import datetime
 
 
 def download_and_convert(url, fmt, quality):
@@ -30,6 +33,7 @@ def download_and_convert(url, fmt, quality):
                     .run(overwrite_output=True, quiet=True)
                 )
                 cleanup_file(downloaded_path)
+                write_metadata(target_file_id)
                 return target_file_id
             elif fmt == "mp4":
                 target_file_id = generate_uuid_filename("mp4")
@@ -41,6 +45,7 @@ def download_and_convert(url, fmt, quality):
                     .run(overwrite_output=True, quiet=True)
                 )
                 cleanup_file(downloaded_path)
+                write_metadata(target_file_id)
                 return target_file_id
             else:
                 raise ValueError("Invalid format")
