@@ -1,14 +1,14 @@
 import os
 import json
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from .file_utils import MEDIA_DIR
 
 METADATA_EXT = ".metadata.json"
 
 # Write metadata with timestamp
 def write_metadata(file_id):
-    metadata = {"timestamp": datetime.timezone.utc().isoformat()}
+    metadata = {"timestamp": datetime.now(timezone.utc).isoformat()}
     meta_path = os.path.join(MEDIA_DIR, file_id + METADATA_EXT)
     with open(meta_path, "w") as f:
         json.dump(metadata, f)
