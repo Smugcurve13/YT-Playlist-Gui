@@ -3,6 +3,10 @@ from api import convert, playlist, batch, status, download
 
 app = FastAPI()
 
+@app.get("/")
+def root():
+    return {"message": "api is running"}
+
 app.include_router(convert.router, prefix="/api")
 app.include_router(playlist.router, prefix="/api")
 app.include_router(batch.router, prefix="/api")
