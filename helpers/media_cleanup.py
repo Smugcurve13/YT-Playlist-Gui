@@ -1,14 +1,14 @@
 import os
 import json
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from .file_utils import MEDIA_DIR
 
 METADATA_EXT = ".metadata.json"
 
 # Write metadata with timestamp
 def write_metadata(file_id):
-    metadata = {"timestamp": datetime.utcnow().isoformat()}
+    metadata = {"timestamp": datetime.now(timezone.utc).isoformat()}
     meta_path = os.path.join(MEDIA_DIR, file_id + METADATA_EXT)
     with open(meta_path, "w") as f:
         json.dump(metadata, f)
@@ -36,7 +36,7 @@ def delete_file_and_metadata(file_path):
 
 async def periodic_media_cleanup(interval_seconds=300, max_age_minutes=30):
     while True:
-        now = datetime.utcnow()
+        now = datetime.now(tz=datetime.timezone.utc)
         for fname in os.listdir(MEDIA_DIR):
             if fname.endswith(METADATA_EXT):
                 continue
@@ -48,4 +48,10 @@ async def periodic_media_cleanup(interval_seconds=300, max_age_minutes=30):
                     ts = datetime.fromisoformat(metadata["timestamp"])
                     if now - ts > timedelta(minutes=max_age_minutes):
                         delete_file_and_metadata(file_path)
+            else:
+                # If the file exists but metadata does not, delete the file
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
         await asyncio.sleep(interval_seconds)

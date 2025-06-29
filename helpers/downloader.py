@@ -1,52 +1,87 @@
 import yt_dlp
 import ffmpeg
+from ffmpeg import Error as FFmpegError
 from .file_utils import generate_uuid_filename, get_media_path, cleanup_file
 from .job_manager import update_job_progress
 from .media_cleanup import write_metadata
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+import re
+
+
+def sanitize_filename(title):
+    # Remove invalid filename characters and trim
+    title = re.sub(r'[\\/:*?"<>|]', '', title)
+    # Remove non-ASCII characters
+    title = re.sub(r'[^\x00-\x7F]+', '', title)
+    # Collapse whitespace
+    title = re.sub(r'\s+', ' ', title).strip()
+    # Limit filename length (e.g., 100 chars)
+    return title[:100]
 
 
 def download_and_convert(url, fmt, quality):
     ext = fmt
-    filename = generate_uuid_filename(ext)
-    ydl_opts = {
-        "outtmpl": get_media_path(filename),
-        "format": "bestaudio/best" if fmt == "mp3" else "bestvideo+bestaudio/best",
-        "noplaylist": True,
+    ydl_info_opts = {
         "quiet": True,
         "ignoreerrors": False,
+        "noplaylist": True,
+        "skip_download": True,
     }
     try:
+        with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        title = info.get('title', 'downloaded_file')
+        safe_title = sanitize_filename(title)
+        filename = f"{safe_title}.{ext}"
+        target_path = get_media_path(filename)
+        # Always download to a temp file to avoid in-place overwrite
+        temp_filename = f"{safe_title}_temp.{info.get('ext', ext)}"
+        temp_path = get_media_path(temp_filename)
+        ydl_opts = {
+            "outtmpl": temp_path,
+            "format": "bestaudio/best" if fmt == "mp3" else "bestvideo+bestaudio/best",
+            "noplaylist": True,
+            "quiet": True,
+            "ignoreerrors": False,
+        }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             downloaded_path = ydl.prepare_filename(info)
+            # If the downloaded file is already in the target format and name, just write metadata
+            if os.path.abspath(downloaded_path) == os.path.abspath(target_path):
+                write_metadata(filename)
+                return filename
             # Conversion if needed
             if fmt == "mp3":
-                target_file_id = generate_uuid_filename("mp3")
-                target_path = get_media_path(target_file_id)
-                (
-                    ffmpeg
-                    .input(downloaded_path)
-                    .output(target_path, audio_bitrate=f"{quality}k" if quality else "320k", format="mp3", acodec="libmp3lame")
-                    .run(overwrite_output=True, quiet=True)
-                )
+                try:
+                    (
+                        ffmpeg
+                        .input(downloaded_path)
+                        .output(target_path, audio_bitrate=f"{quality}k" if quality else "320k", format="mp3", acodec="libmp3lame")
+                        .run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
+                    )
+                except FFmpegError as fe:
+                    cleanup_file(downloaded_path)
+                    raise Exception(f"ffmpeg error: {fe.stderr.decode('utf-8', errors='ignore')}")
                 cleanup_file(downloaded_path)
-                write_metadata(target_file_id)
-                return target_file_id
+                write_metadata(filename)
+                return filename
             elif fmt == "mp4":
-                target_file_id = generate_uuid_filename("mp4")
-                target_path = get_media_path(target_file_id)
-                (
-                    ffmpeg
-                    .input(downloaded_path)
-                    .output(target_path, video_bitrate=f"{quality}k" if quality else None, format="mp4", vcodec="libx264", acodec="aac")
-                    .run(overwrite_output=True, quiet=True)
-                )
+                try:
+                    (
+                        ffmpeg
+                        .input(downloaded_path)
+                        .output(target_path, video_bitrate=f"{quality}k" if quality else None, format="mp4", vcodec="libx264", acodec="aac")
+                        .run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
+                    )
+                except FFmpegError as fe:
+                    cleanup_file(downloaded_path)
+                    raise Exception(f"ffmpeg error: {fe.stderr.decode('utf-8', errors='ignore')}")
                 cleanup_file(downloaded_path)
-                write_metadata(target_file_id)
-                return target_file_id
+                write_metadata(filename)
+                return filename
             else:
                 raise ValueError("Invalid format")
     except Exception as e:
